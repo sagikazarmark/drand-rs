@@ -46,7 +46,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 # arkworks 0.6 is on digest 0.10.
-sha2 = { version = "0.11", default-features = false }
+sha2 = { version = "0.10", default-features = false }
 thiserror = { version = "2", default-features = false }
 
 # The client's dependencies, by target: everywhere it builds, native only, wasm only.
