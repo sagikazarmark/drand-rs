@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "drand"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "restate-drand"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "drand",
