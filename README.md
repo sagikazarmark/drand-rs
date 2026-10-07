@@ -1,6 +1,5 @@
 # drand-rs
 
-[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/sagikazarmark/drand-rs/ci.yaml?style=flat-square)](https://github.com/sagikazarmark/drand-rs/actions/workflows/ci.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/sagikazarmark/drand-rs/badge?style=flat-square)](https://securityscorecards.dev/viewer/?uri=github.com/sagikazarmark/drand-rs)
 [![crates.io](https://img.shields.io/crates/v/drand?style=flat-square)](https://crates.io/crates/drand)
 [![docs.rs](https://img.shields.io/docsrs/drand?style=flat-square)](https://docs.rs/drand)
