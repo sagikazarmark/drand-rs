@@ -14,6 +14,10 @@ updates:
           - "*"
         exclude-patterns:
           - "ark-*"
+    ignore:
+      # sha2 must stay on the digest version arkworks uses (digest 0.10 as of arkworks 0.6).
+      - dependency-name: sha2
+        versions: [">=0.11"]
 
   - package-ecosystem: github-actions
     directory: /

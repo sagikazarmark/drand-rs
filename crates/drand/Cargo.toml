@@ -61,7 +61,7 @@ web-time = { version = "1", optional = true }
 tokio = { version = "1", features = ["time"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 # Bodies are streamed there too, to stop reading past `MAX_BODY_LEN`.
 reqwest = { version = "0.13", default-features = false, features = ["stream"], optional = true }
 # JS futures are not `Send`; wasm32-unknown-unknown is single-threaded.
