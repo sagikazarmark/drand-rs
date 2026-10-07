@@ -1,0 +1,48 @@
+[package]
+name = "restate-drand"
+version.workspace = true
+description = "drand randomness in Restate handlers: commit to a future round, wait durably, fetch and verify the beacon"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["restate", "drand", "randomness", "beacon", "durable"]
+categories = ["asynchronous", "network-programming", "wasm"]
+
+[features]
+default = ["default-tls"]
+## TLS for the built-in drand client (or pass your own `reqwest::Client`).
+## `default-tls` is reqwest's default backend (rustls in reqwest 0.13).
+default-tls = ["drand/default-tls"]
+rustls = ["drand/rustls"]
+native-tls = ["drand/native-tls"]
+
+[dependencies]
+anyhow = "1"
+drand = { workspace = true, features = ["bls12-381", "client"] }
+restate-ext = "0.3"
+restate-sdk = { version = "0.12", default-features = false }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+# restate-sdk pulls in getrandom 0.2 (via jsonwebtoken), which builds on
+# wasm32-unknown-unknown only with its JS backend.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+drand = { workspace = true, features = ["test-chain"] }
+hex = "0.4"
+
+# The e2e tests run a real restate-server: unix only.
+[target.'cfg(unix)'.dev-dependencies]
+restate-e2e-harness = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

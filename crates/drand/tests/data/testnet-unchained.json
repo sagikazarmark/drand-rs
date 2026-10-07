@@ -1,0 +1,5 @@
+{
+  "_source": "drand testnet chain 7672797f… (pedersen-bls-unchained). Values from the drand_core test suite (github.com/thibmeu/drand-rs, MIT); the network itself is retired.",
+  "info": {"public_key":"8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11","period":3,"genesis_time":1651677099,"hash":"7672797f548f3f4748ac4bf3352fc6c6b6468c9ad40ad456a397545c6e2df5bf","groupHash":"65083634d852ae169e21b6ce5f0410be9ed4cc679b9970236f7875cff667e13d","schemeID":"pedersen-bls-unchained","metadata":{"beaconID":"testnet-unchained-3s"}},
+  "beacon": {"round":1000000,"randomness":"6671747f7d838f18159c474579ea19e8d863e8c25e5271fd7f18ca2ac85181cf","signature":"86b265e10e060805d20dca88f70f6b5e62d5956e7790d32029dfb73fbcd1996bc7aebdea7aeaf74dac0ca2b3ce8f7a6a0399f224a05fe740c0bac9da638212082b0ed21b1a8c5e44a33123f28955ef0713e93e21f6af0cda4073d9a73387434d"}
+}
