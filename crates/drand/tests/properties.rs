@@ -2,7 +2,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, time::Duration};
 
 use drand::{Beacon, Schedule, UnixTime};
 #[cfg(feature = "bls12-381")]
@@ -34,6 +34,19 @@ proptest! {
         if let Some(prev) = r.checked_sub(1).filter(|p| *p > 0) {
             prop_assert!(s.round_time(prev).unwrap() <= t);
         }
+    }
+
+    #[test]
+    fn commit_round_leaves_the_lead_as_margin(genesis in 0i64..2_000_000_000, period in 1u32..120, t in -10_000_000i64..4_000_000_000_000, extra in 0u64..1_000_000) {
+        let s = Schedule::new(genesis, NonZeroU32::new(period).unwrap());
+        let now = UnixTime::from_millis(t);
+        let period = s.period();
+        let due = |lead| s.round_time(s.commit_round(now, lead)).unwrap();
+        let extra = Duration::from_millis(extra);
+        // One period of lead: not due yet; two: not due for a full period.
+        prop_assert!(due(period + extra) > now);
+        prop_assert!(due(2 * period + extra) > now.saturating_add(period));
+        prop_assert_eq!(s.commit_round(now, period), s.round_after(now));
     }
 
     #[test]

@@ -61,11 +61,24 @@ impl Schedule {
     /// before genesis).
     ///
     /// Its randomness is unknown at `time`, assuming fewer than a threshold
-    /// of drand nodes collude and the local clock is right. Leave at least one
-    /// period of margin when committing to a round.
+    /// of drand nodes collude and the local clock is right. It may be due
+    /// moments later, though: to commit to a round with margin, use
+    /// [`Schedule::commit_round`].
     #[must_use]
     pub fn round_after(&self, time: UnixTime) -> u64 {
         self.round_at(time).map_or(1, |r| r.saturating_add(1))
+    }
+
+    /// The round to commit to at `now`: the latest round due at `now + lead`
+    /// (round 1 before genesis).
+    ///
+    /// With `lead >= period` it is not published yet at `now`; with
+    /// `lead >= 2 × period`, not for at least a full period. Its randomness is
+    /// unknown at `now`, assuming fewer than a threshold of drand nodes collude
+    /// and the local clock is right.
+    #[must_use]
+    pub fn commit_round(&self, now: UnixTime, lead: Duration) -> u64 {
+        self.round_at(now.saturating_add(lead)).unwrap_or(1)
     }
 }
 
@@ -98,5 +111,29 @@ mod tests {
             Some(1)
         );
         assert_eq!(s.round_time(u64::MAX), None);
+    }
+
+    #[test]
+    fn commit_round_boundaries() {
+        let s = quicknet();
+        let g = s.genesis_time();
+        let at = |millis: i64| UnixTime::from_millis(g.as_millis() + millis);
+        let lead = |secs: u64| Duration::from_secs(secs);
+        // Before genesis: round 1, until `now + lead` reaches genesis.
+        assert_eq!(s.commit_round(at(-100_000), lead(6)), 1);
+        assert_eq!(s.commit_round(at(-6001), lead(6)), 1);
+        assert_eq!(s.commit_round(at(-6000), lead(6)), 1);
+        assert_eq!(s.commit_round(at(-3000), lead(6)), 2);
+        // Period edges: `now + lead` crossing a round boundary.
+        assert_eq!(s.commit_round(g, lead(6)), 3);
+        assert_eq!(s.commit_round(at(2999), lead(6)), 3);
+        assert_eq!(s.commit_round(at(3000), lead(6)), 4);
+        // Zero lead: the latest due round.
+        assert_eq!(s.commit_round(g, Duration::ZERO), 1);
+        assert_eq!(s.commit_round(at(-1), Duration::ZERO), 1);
+        // A one-period lead is `round_after`.
+        assert_eq!(s.commit_round(at(1500), lead(3)), s.round_after(at(1500)));
+        // Saturates instead of overflowing.
+        assert!(s.commit_round(g, Duration::MAX) > 1);
     }
 }

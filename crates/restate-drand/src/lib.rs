@@ -198,9 +198,7 @@ impl Drand {
     ) -> Result<Commitment, TerminalError> {
         let now = UnixTime::from(ctx.now_named(CLOCK_STEP).await?);
         let schedule = self.chain().schedule();
-        let round = schedule
-            .round_at(now.saturating_add(self.lead))
-            .unwrap_or(1);
+        let round = schedule.commit_round(now, self.lead);
         Ok(Commitment {
             round,
             due_at: schedule
