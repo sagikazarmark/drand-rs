@@ -29,6 +29,7 @@
 //! failure, or a relay that dislikes a published round could force a redraw.
 //!
 //! ```
+//! # #[cfg(feature = "bls12-381")] {
 //! use drand::{Beacon, Verifier, chains};
 //!
 //! let verifier = Verifier::new(&chains::quicknet())?;
@@ -42,6 +43,7 @@
 //!     hex::encode(verified.randomness()),
 //!     "fe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd",
 //! );
+//! # }
 //! # Ok::<(), drand::Error>(())
 //! ```
 //!
