@@ -121,6 +121,7 @@ impl TransportErrorKind {
 }
 
 /// A transport failure: a [`TransportErrorKind`] and an optional cause.
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct TransportError {
     kind: TransportErrorKind,

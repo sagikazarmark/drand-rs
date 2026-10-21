@@ -26,7 +26,7 @@ println!("{}", hex::encode(verified.randomness()));
 use std::time::Duration;
 use drand::{chains, client::{Client, Fetch}};
 
-let client = Client::builder(chains::quicknet()).build()?; // feature: client
+let client = Client::builder(chains::quicknet()).build()?; // feature: reqwest
 let latest = client.latest().await?;
 let next = client.wait_for(latest.round() + 1, Duration::from_secs(30)).await?;
 match client.fetch(next.round() + 1).await? {
