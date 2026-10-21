@@ -4,9 +4,9 @@ hack := "--workspace --exclude-features native-tls"
 
 wasm := "wasm32-unknown-unknown"
 
-# The client without reqwest (bring-your-own transport): not an `--each-feature`
-# combination, so `clippy`, `test` and `doc` run it explicitly.
-no_reqwest := "-p drand --no-default-features --features client,test-chain"
+# The client without reqwest (bring-your-own transport, `TowerTransport`): not
+# an `--each-feature` combination, so `clippy`, `test` and `doc` run it explicitly.
+no_reqwest := "-p drand --no-default-features --features client,tower,test-chain"
 
 # List the recipes.
 [private]

@@ -46,6 +46,7 @@ match client.fetch(next.round() + 1).await? {
 | `reqwest` | no | The default transport, `ReqwestTransport` (implies `client`); the only place `reqwest` appears |
 | `default-tls` | yes | TLS for `ReqwestTransport`: reqwest's default backend (rustls) |
 | `rustls` / `native-tls` | no | A specific TLS backend for `ReqwestTransport` |
+| `tower` | no | `TowerTransport`: an `HttpTransport` over any `tower::Service` (implies `client`); `tower-reqwest`, `tower-worker-fetch` on Cloudflare Workers, or your own stack |
 | `test-chain` | no | `TestChain`: signs beacons with a key derived from a public seed |
 
 The TLS features only matter with `reqwest`; the core stays `no_std` either way. The usual setup is `features =
@@ -76,6 +77,53 @@ For another backend (a JS host's `fetch`, a `tower` service, an in-memory fake i
 `build()` fails with `Error::Config` if no transport is set. `ReqwestTransport::new` is the only place `reqwest`
 appears in this crate's API, so a `reqwest` upgrade only affects you if you pass one in.
 
+#### tower services
+
+With the `tower` feature, `TowerTransport` adapts any `tower::Service` that takes an `http::Request<Full<Bytes>>`
+and returns an `http::Response` with a streaming `http_body::Body`. `tower-worker-fetch` on Cloudflare Workers
+accepts any `http_body::Body`, so it fits as is; `tower-reqwest` takes `Request<reqwest::Body>`, so it needs a
+`map_request` in front (below); so does any other service with its own request body type. `TowerTransport`
+clones the service per request, caps the body at the client's limit while reading, and reports the service's
+errors as `TransportErrorKind::Other` (body read errors as `Body`) with the original error as the source.
+Nothing `tower-worker-fetch`-specific is in this crate; it is an ordinary service:
+
+```rust
+use drand::client::{Client, TowerTransport};
+use tower_worker_fetch::FetchService;
+
+let client = Client::builder(drand::chains::quicknet())
+    .http_transport(TowerTransport::new(FetchService::new()))
+    .build()?;
+```
+
+Over `tower-reqwest` (or any stack whose request body is not `Full<Bytes>`), convert the body first:
+
+```rust
+use http_body_util::Full;
+use tower::ServiceBuilder;
+use tower_reqwest::HttpClientService;
+
+let service = ServiceBuilder::new()
+    .map_request(|req: http::Request<Full<bytes::Bytes>>| req.map(reqwest::Body::wrap))
+    .service(HttpClientService::new(reqwest::Client::new()));
+let transport = TowerTransport::new(service);
+```
+
+A classifier refines the error kind for a service whose error type says more (only diagnostics depend on it;
+the client retries on the same conditions whatever the kind):
+
+```rust
+use drand::client::TransportErrorKind;
+
+let transport = TowerTransport::new(FetchService::new()).with_classifier(|e| {
+    let e = e.downcast_ref::<tower_worker_fetch::Error>()?;
+    Some(if e.is_timeout() { TransportErrorKind::Timeout } else { TransportErrorKind::Other })
+});
+```
+
+No `tower::timeout` layer is needed: the client enforces its per-request timeout above the transport (and on
+Workers, where there is no tokio, `tower::timeout` would panic). Hedging and retries stay in the client too.
+
 The client, `HttpTransport` and their futures are `Send` on every target, `wasm32` included, so they drop into
 `Send`-requiring frameworks (tower, axum, Restate) on Cloudflare Workers too. JS futures are not `Send`, but
 `wasm32-unknown-unknown` is single-threaded: the client wraps its own, and a transport over a JS API wraps
@@ -87,8 +135,8 @@ is reported as unsupported. MSRV: 1.92.
 
 ## Tests
 
-`cargo test -p drand --features reqwest,test-chain` runs everything offline: real beacons from the live relays are checked
-in under `tests/data`, and client behavior is tested against in-process mock relays. The live tests talk to
+`cargo test -p drand --features reqwest,tower,test-chain` runs everything offline: real beacons from the live relays are checked
+in under `tests/data`, and client behavior is tested against in-process mock relays and services. The live tests talk to
 every public relay and API version separately (chain info, quicknet and `default` rounds, a future round) and
 are opt-in:
 
