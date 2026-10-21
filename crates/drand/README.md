@@ -80,11 +80,12 @@ appears in this crate's API, so a `reqwest` upgrade only affects you if you pass
 #### tower services
 
 With the `tower` feature, `TowerTransport` adapts any `tower::Service` that takes an `http::Request<Full<Bytes>>`
-and returns an `http::Response` with a streaming `http_body::Body`: `tower-reqwest` on native targets,
-`tower-worker-fetch` on Cloudflare Workers, or a `ServiceBuilder` stack over either. It clones the service per
-request, caps the body at the client's limit while reading, and reports the service's errors as
-`TransportErrorKind::Other` (body read errors as `Body`) with the original error as the source. Nothing
-`tower-worker-fetch`-specific is in this crate; it is an ordinary service:
+and returns an `http::Response` with a streaming `http_body::Body`. `tower-worker-fetch` on Cloudflare Workers
+accepts any `http_body::Body`, so it fits as is; `tower-reqwest` takes `Request<reqwest::Body>`, so it needs a
+`map_request` in front (below); so does any other service with its own request body type. `TowerTransport`
+clones the service per request, caps the body at the client's limit while reading, and reports the service's
+errors as `TransportErrorKind::Other` (body read errors as `Body`) with the original error as the source.
+Nothing `tower-worker-fetch`-specific is in this crate; it is an ordinary service:
 
 ```rust
 use drand::client::{Client, TowerTransport};
@@ -93,6 +94,19 @@ use tower_worker_fetch::FetchService;
 let client = Client::builder(drand::chains::quicknet())
     .http_transport(TowerTransport::new(FetchService::new()))
     .build()?;
+```
+
+Over `tower-reqwest` (or any stack whose request body is not `Full<Bytes>`), convert the body first:
+
+```rust
+use http_body_util::Full;
+use tower::ServiceBuilder;
+use tower_reqwest::HttpClientService;
+
+let service = ServiceBuilder::new()
+    .map_request(|req: http::Request<Full<bytes::Bytes>>| req.map(reqwest::Body::wrap))
+    .service(HttpClientService::new(reqwest::Client::new()));
+let transport = TowerTransport::new(service);
 ```
 
 A classifier refines the error kind for a service whose error type says more (only diagnostics depend on it;

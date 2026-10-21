@@ -17,9 +17,10 @@ pub type BoxError = Box<dyn core::error::Error + Send + Sync>;
 
 /// An [`HttpTransport`] over any [`tower_service::Service`] that takes an
 /// `http::Request<Full<Bytes>>` and returns an `http::Response` with a
-/// streaming [`http_body::Body`]: `tower-reqwest` on native targets,
-/// `tower-worker-fetch` on Cloudflare Workers, or your own stack of layers over
-/// one of them.
+/// streaming [`http_body::Body`]: `tower-worker-fetch` on Cloudflare Workers
+/// as is (it accepts any `http_body::Body`), `tower-reqwest` behind a
+/// `map_request` that converts the body (it takes `Request<reqwest::Body>`;
+/// `req.map(reqwest::Body::wrap)`), or your own stack of layers over either.
 ///
 /// Each `send` clones the service and drives it once (`poll_ready`, then
 /// `call`), the usual tower pattern: services are expected to be cheap to
