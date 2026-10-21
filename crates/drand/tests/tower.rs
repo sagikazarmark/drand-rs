@@ -1,6 +1,8 @@
-//! `TowerTransport` over an in-process `tower::Service`, no network: the client
-//! end to end, the body limit (up front and while streaming), and how service
-//! and body errors are reported.
+//! `TowerTransport`, first over an in-process `tower::Service` with no network
+//! (the client end to end, the body limit up front and while streaming, how
+//! service and body errors are reported), then over a real HTTP stack,
+//! `tower-reqwest` behind the `map_request` the README shows, against mock
+//! relays.
 
 #![cfg(all(
     feature = "client",
@@ -20,17 +22,24 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll},
+    time::Duration,
 };
 
+use axum::{Router, extract::Path, response::IntoResponse, routing::get};
 use bytes::Bytes;
 use common::{FixedClock, due_ms, signed, test_chain};
 use drand::{
-    client::{BoxError, Client, Error, Fetch, RelayErrorKind, TowerTransport, TransportErrorKind},
+    client::{
+        BoxError, Client, Error, Fetch, HttpTransport, RelayErrorKind, TowerTransport,
+        TransportErrorKind,
+    },
     http::{MAX_BODY_LEN, Relay},
 };
-use http::{Method, Request, Response, header};
+use http::{Method, Request, Response, StatusCode, header};
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::Full;
+use tower::ServiceBuilder;
+use tower_reqwest::HttpClientService;
 use tower_service::Service;
 
 /// A streaming body: one frame per chunk, then `fail` if set. Counts the
@@ -330,4 +339,148 @@ fn debug_names_the_service_without_requiring_debug() {
     let debug = format!("{transport:?}");
     assert!(debug.starts_with("TowerTransport {"), "{debug}");
     assert!(debug.contains("Mock"), "{debug}");
+}
+
+// ---------------------------------------------------------------------------
+// Over a real HTTP stack: tower-reqwest behind the README's `map_request`.
+
+/// The stack the README shows for `tower-reqwest`, with an optional classifier.
+fn over_reqwest(
+    classify: Option<fn(&BoxError) -> Option<TransportErrorKind>>,
+) -> impl HttpTransport {
+    let service = ServiceBuilder::new()
+        .map_request(|req: Request<Full<Bytes>>| req.map(reqwest::Body::wrap))
+        .service(HttpClientService::new(reqwest::Client::new()));
+    let transport = TowerTransport::new(service);
+    match classify {
+        Some(classify) => transport.with_classifier(classify),
+        None => transport,
+    }
+}
+
+/// A mock v1 relay: `handler(round)` is served after its delay. Returns the
+/// base URL.
+async fn relay(
+    handler: impl Fn(u64) -> (Duration, axum::response::Response) + Clone + Send + Sync + 'static,
+) -> String {
+    let app = Router::new().route(
+        "/{chain}/public/{round}",
+        get(move |Path((_, round)): Path<(String, String)>| {
+            let handler = handler.clone();
+            async move {
+                let (delay, response) = handler(round.parse().unwrap_or(0));
+                tokio::time::sleep(delay).await;
+                response
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+fn beacon(round: u64) -> (Duration, axum::response::Response) {
+    (Duration::ZERO, beacon_json(round).into_response())
+}
+
+fn reqwest_client(transport: impl HttpTransport, relays: &[String]) -> Client {
+    Client::builder(test_chain().chain().clone())
+        .relays(relays.iter().map(|r| Relay::v1(r).unwrap()).collect())
+        .http_transport(transport)
+        .clock(FixedClock::at(due_ms(100) + 100))
+        .request_timeout(Duration::from_millis(500))
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn tower_reqwest_drives_fetch_and_latest() {
+    let relay = relay(beacon).await;
+    let c = reqwest_client(over_reqwest(None), &[relay]);
+    let Fetch::Ready(b) = c.fetch(10).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(b.round(), 10);
+    assert_eq!(c.latest().await.unwrap().round(), 100);
+}
+
+#[tokio::test]
+async fn tower_reqwest_caps_bodies_with_and_without_content_length() {
+    // A `Vec<u8>` body carries `Content-Length`; a streamed one does not.
+    let announced = relay(|_| {
+        (
+            Duration::ZERO,
+            (StatusCode::OK, vec![b' '; MAX_BODY_LEN + 1]).into_response(),
+        )
+    })
+    .await;
+    let streamed = relay(|_| {
+        let chunks = (0..20).map(|_| Ok::<_, std::io::Error>(vec![b' '; 8 * 1024]));
+        (
+            Duration::ZERO,
+            axum::body::Body::from_stream(futures_util::stream::iter(chunks)).into_response(),
+        )
+    })
+    .await;
+    let c = reqwest_client(over_reqwest(None), &[announced, streamed]);
+    let Error::Relays(errors) = c.fetch(10).await.unwrap_err() else {
+        panic!()
+    };
+    assert_eq!(errors.len(), 2);
+    assert!(matches!(errors[0].kind, RelayErrorKind::BodyTooLarge));
+    assert!(matches!(errors[1].kind, RelayErrorKind::BodyTooLarge));
+}
+
+#[tokio::test]
+async fn tower_reqwest_slow_relays_are_cut_off_by_the_client_timeout() {
+    let slow = relay(|r| (Duration::from_secs(5), beacon_json(r).into_response())).await;
+    let c = reqwest_client(over_reqwest(None), &[slow]);
+    let Error::Relays(errors) = c.fetch(10).await.unwrap_err() else {
+        panic!()
+    };
+    assert!(matches!(errors[0].kind, RelayErrorKind::Timeout));
+}
+
+#[tokio::test]
+async fn tower_reqwest_errors_classify_by_downcast() {
+    // Nothing listens on the discard port.
+    let refused = ["http://127.0.0.1:9".to_owned()];
+
+    // By default the kind is `Other`, and the reqwest error is the source.
+    let c = reqwest_client(over_reqwest(None), &refused);
+    let Error::Relays(errors) = c.fetch(10).await.unwrap_err() else {
+        panic!()
+    };
+    let RelayErrorKind::Transport(t) = &errors[0].kind else {
+        panic!("{:?}", errors[0].kind)
+    };
+    assert_eq!(t.kind(), TransportErrorKind::Other);
+    let source = std::error::Error::source(t).unwrap();
+    assert!(
+        source
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_connect),
+        "{source}"
+    );
+
+    // A classifier that downcasts to `reqwest::Error` tells `Connect` apart.
+    let classify = |e: &BoxError| {
+        let e = e.downcast_ref::<reqwest::Error>()?;
+        Some(if e.is_connect() {
+            TransportErrorKind::Connect
+        } else if e.is_timeout() {
+            TransportErrorKind::Timeout
+        } else {
+            TransportErrorKind::Other
+        })
+    };
+    let c = reqwest_client(over_reqwest(Some(classify)), &refused);
+    let Error::Relays(errors) = c.fetch(10).await.unwrap_err() else {
+        panic!()
+    };
+    let RelayErrorKind::Transport(t) = &errors[0].kind else {
+        panic!("{:?}", errors[0].kind)
+    };
+    assert_eq!(t.kind(), TransportErrorKind::Connect);
 }
