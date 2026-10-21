@@ -1,5 +1,5 @@
-//! The HTTP leaf under the client: [`HttpTransport`] and, with the `reqwest`
-//! feature, its default implementation, `ReqwestTransport`.
+//! The HTTP leaf under the client: [`HttpTransport`] and its implementations,
+//! `ReqwestTransport` (feature `reqwest`) and `TowerTransport` (feature `tower`).
 //!
 //! Everything above the leaf (relay selection, hedging, timeouts, response
 //! classification, verification) is the client's; a transport only sends one
@@ -17,6 +17,10 @@ use bytes::Bytes;
 mod reqwest_transport;
 #[cfg(feature = "reqwest")]
 pub use reqwest_transport::ReqwestTransport;
+#[cfg(feature = "tower")]
+mod tower_transport;
+#[cfg(feature = "tower")]
+pub use tower_transport::{BoxError, TowerTransport};
 
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 compile_error!(
@@ -77,9 +81,11 @@ pub fn assume_send<F: Future>(f: F) -> impl Future<Output = F::Output> + Send {
 ///   client allocate without bound). The limit applies whatever the status:
 ///   an oversized error page is reported as too large, not by its status.
 ///
-/// `ReqwestTransport` (feature `reqwest`) is the default; implement this for other backends (a
-/// JS host's `fetch`, a `tower` service, an in-memory fake in tests). On
-/// `wasm32`, see [`assume_send`].
+/// `ReqwestTransport` (feature `reqwest`) is the default; `TowerTransport`
+/// (feature `tower`) adapts any `tower::Service` over `http` types, such as
+/// `tower-reqwest` or, on Cloudflare Workers, `tower-worker-fetch`. Implement
+/// this for anything else (a JS host's `fetch` directly, an in-memory fake in
+/// tests). On `wasm32`, see [`assume_send`].
 pub trait HttpTransport: Send + Sync + 'static {
     /// Sends `req`, buffering at most `limit` bytes of body.
     fn send(&self, req: Request<Bytes>, limit: usize) -> TransportFuture<'_>;

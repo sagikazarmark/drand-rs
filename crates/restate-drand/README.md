@@ -55,8 +55,10 @@ The built-in drand client's default transport is reqwest (`reqwest`, default) wi
 reqwest's default backend: rustls), `rustls` or `native-tls`. To pick a TLS backend, set `default-features =
 false` and enable `reqwest` plus one of them. To bring your own HTTP client,
 `.http_transport(ReqwestTransport::new(my_reqwest_client))` wraps a `reqwest::Client` (a proxy, custom roots);
-any other backend can implement `drand::client::HttpTransport`, and with `default-features = false` and no
-`reqwest` feature, reqwest is not compiled at all (then `http_transport` is mandatory).
+with the `tower` feature, `.http_transport(TowerTransport::new(service))` takes any `tower::Service` over `http`
+types (`tower-reqwest`, or `tower-worker-fetch` on Cloudflare Workers); any other backend can implement
+`drand::client::HttpTransport`. With `default-features = false` and no `reqwest` feature, reqwest is not
+compiled at all (then `http_transport` is mandatory).
 
 The API exposes `drand` (re-exported), `restate-sdk` 0.12 and `restate-ext` 0.3 types, so a breaking upgrade of any
 of them is a breaking release of this crate.

@@ -19,6 +19,9 @@ reqwest = ["drand/reqwest"]
 default-tls = ["drand/default-tls"]
 rustls = ["drand/rustls"]
 native-tls = ["drand/native-tls"]
+## `drand::client::TowerTransport`: the drand client over any `tower::Service`
+## (`tower-worker-fetch` on Cloudflare Workers).
+tower = ["drand/tower"]
 
 [dependencies]
 anyhow = "1"

@@ -16,8 +16,10 @@
 //! Workers); not on WASI. HTTP goes through `client::HttpTransport`. The
 //! `reqwest` feature adds the default transport, `client::ReqwestTransport`,
 //! on reqwest's default TLS backend (the default `default-tls` feature; pick
-//! another with `rustls` or `native-tls`). Without it, bring your own
-//! transport and reqwest stays out of the build.
+//! another with `rustls` or `native-tls`). The `tower` feature adds
+//! `client::TowerTransport`, over any `tower::Service` (`tower-reqwest`,
+//! `tower-worker-fetch` on Cloudflare Workers). Without `reqwest`, bring your
+//! own transport and reqwest stays out of the build.
 //!
 //! # Trust model
 //!

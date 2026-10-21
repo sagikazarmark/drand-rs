@@ -9,8 +9,10 @@
 //! is `ReqwestTransport`, which needs a TLS feature: `default-tls` (on by
 //! default, reqwest's default backend), `rustls` or `native-tls`. Otherwise
 //! [`ClientBuilder::http_transport`] is mandatory: a `ReqwestTransport` over
-//! your own `reqwest::Client`, or any other `HttpTransport` (then `reqwest`
-//! stays out of the build).
+//! your own `reqwest::Client`, a `TowerTransport` (feature `tower`) over any
+//! `tower::Service` (`tower-reqwest`, or `tower-worker-fetch` on Cloudflare
+//! Workers), or any other `HttpTransport` (then `reqwest` stays out of the
+//! build).
 //!
 //! The client, [`HttpTransport`] and their futures are `Send` on every target,
 //! `wasm32` included, so they can live in shared state and run inside
@@ -70,6 +72,8 @@ use crate::{
 };
 #[cfg(feature = "reqwest")]
 pub use transport::ReqwestTransport;
+#[cfg(feature = "tower")]
+pub use transport::{BoxError, TowerTransport};
 pub use transport::{
     HttpTransport, TransportError, TransportErrorKind, TransportFuture, assume_send,
 };
@@ -352,8 +356,9 @@ impl ClientBuilder {
 
     /// Sends requests through `transport` instead of the default
     /// `ReqwestTransport`: e.g. `ReqwestTransport::new(client)` over a
-    /// `reqwest::Client` with a proxy, or your own [`HttpTransport`].
-    /// Mandatory without the `reqwest` feature.
+    /// `reqwest::Client` with a proxy, `TowerTransport::new(service)` over a
+    /// `tower::Service`, or your own [`HttpTransport`]. Mandatory without the
+    /// `reqwest` feature.
     #[must_use]
     pub fn http_transport(mut self, transport: impl HttpTransport) -> Self {
         self.transport = Some(Arc::new(transport));

@@ -549,6 +549,8 @@ dependencies = [
  "gloo-timers",
  "hex",
  "http",
+ "http-body",
+ "http-body-util",
  "postcard",
  "proptest",
  "reqwest",
@@ -558,6 +560,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror",
  "tokio",
+ "tower-service",
  "tracing",
  "web-time",
 ]

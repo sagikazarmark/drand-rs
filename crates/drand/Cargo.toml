@@ -34,6 +34,10 @@ client = [
 ## `reqwest` shows in the API; leave it off to bring your own `HttpTransport`
 ## and keep reqwest out of the build.
 reqwest = ["client", "dep:reqwest"]
+## `TowerTransport`: an `HttpTransport` over any `tower::Service` that speaks
+## `http::Request` / `http::Response` (implies `client`). `tower-reqwest` on
+## native targets, `tower-worker-fetch` on Cloudflare Workers, or your own stack.
+tower = ["client", "dep:tower-service", "dep:http-body", "dep:http-body-util"]
 ## TLS for `ReqwestTransport`. These do nothing without `reqwest`. `default-tls`
 ## is reqwest's default backend (rustls in reqwest 0.13); to pick another,
 ## disable default features.
@@ -61,7 +65,12 @@ thiserror = { version = "2", default-features = false }
 bytes = { version = "1", default-features = false, optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
 http = { version = "1", default-features = false, features = ["std"], optional = true }
+# `TowerTransport` (feature `tower`): the service trait alone (no `tower` crate),
+# and streaming bodies, read frame by frame up to `MAX_BODY_LEN`.
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
 reqwest = { version = "0.13", default-features = false, optional = true }
+tower-service = { version = "0.3", optional = true }
 tracing = { version = "0.1", default-features = false, features = ["std"], optional = true }
 # `std::time` on native; `Date.now()` / `performance.now()` on wasm, where `std` panics.
 web-time = { version = "1", optional = true }
