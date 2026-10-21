@@ -544,9 +544,11 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "axum",
+ "bytes",
  "futures-util",
  "gloo-timers",
  "hex",
+ "http",
  "postcard",
  "proptest",
  "reqwest",
@@ -1799,9 +1801,11 @@ name = "restate-drand"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "drand",
  "getrandom 0.2.17",
  "hex",
+ "http",
  "restate-e2e-harness",
  "restate-ext",
  "restate-sdk",

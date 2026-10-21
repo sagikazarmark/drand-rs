@@ -1,13 +1,26 @@
 //! An async client that fetches and verifies beacons from several relays.
 //!
 //! Runs on native targets (on tokio's timer, which needs a tokio runtime) and on
-//! `wasm32-unknown-unknown` (reqwest's `fetch` backend and `setTimeout`, so in
+//! `wasm32-unknown-unknown` (the JS host's `fetch` and `setTimeout`, so in
 //! browsers and Cloudflare Workers, with no tokio). Not on WASI: use
 //! [`crate::http`] with the host's HTTP API there.
 //!
-//! The built-in HTTP client needs a TLS feature: `default-tls` (on by default,
-//! reqwest's default backend), `rustls` or `native-tls`. Without one, pass your
-//! own client with [`ClientBuilder::http_client`].
+//! HTTP goes through [`HttpTransport`]. With the `reqwest` feature the default
+//! is `ReqwestTransport`, which needs a TLS feature: `default-tls` (on by
+//! default, reqwest's default backend), `rustls` or `native-tls`. Otherwise
+//! [`ClientBuilder::http_transport`] is mandatory: a `ReqwestTransport` over
+//! your own `reqwest::Client`, or any other `HttpTransport` (then `reqwest`
+//! stays out of the build).
+//!
+//! The client, [`HttpTransport`] and their futures are `Send` on every target,
+//! `wasm32` included, so they can live in shared state and run inside
+//! `Send`-requiring frameworks (tower, axum, Restate) without wrapping. JS
+//! futures (`fetch`, `setTimeout`) are not `Send`, but `wasm32-unknown-unknown`
+//! is single-threaded: the client and `ReqwestTransport` wrap them in
+//! `send_wrapper::SendWrapper`, which panics rather than misbehaves if a
+//! future is ever polled from another thread. A transport over a JS API does
+//! the same with [`assume_send`]. Threaded wasm (the `atomics` target feature)
+//! is rejected at compile time.
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), drand::client::Error> {
@@ -27,8 +40,9 @@
 //! # Ok(()) }
 //! ```
 
+mod transport;
+
 use std::{
-    boxed::Box,
     fmt,
     num::NonZeroU64,
     string::{String, ToString},
@@ -39,13 +53,13 @@ use std::{
 
 use core::{future::Future, pin::pin};
 
+use ::http::{HeaderValue, Method, Request, header::USER_AGENT};
+use bytes::Bytes;
 use futures_util::{
     StreamExt,
     future::{Either, select},
     stream::FuturesUnordered,
 };
-pub use reqwest;
-use reqwest::header::{HeaderValue, USER_AGENT};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "test-chain")]
@@ -53,6 +67,11 @@ use crate::TestChain;
 use crate::{
     ChainHash, ChainInfo, Schedule, UnixTime, VerifiedBeacon, Verifier,
     http::{self, Answer, GRACE, MAX_BODY_LEN, Relay, RoundRef},
+};
+#[cfg(feature = "reqwest")]
+pub use transport::ReqwestTransport;
+pub use transport::{
+    HttpTransport, TransportError, TransportErrorKind, TransportFuture, assume_send,
 };
 
 /// The result of one fetch attempt.
@@ -129,12 +148,13 @@ pub enum Error {
     /// Round 0 was requested; rounds start at 1.
     #[error("round 0 does not exist")]
     RoundZero,
-    /// Invalid client configuration (no relays, no TLS backend, mismatched test chain).
+    /// Invalid client configuration (no relays, no transport and no default,
+    /// mismatched test chain).
     #[error("client configuration: {0}")]
     Config(&'static str),
-    /// The HTTP client could not be built.
-    #[error("building the HTTP client")]
-    Http(#[source] reqwest::Error),
+    /// The default transport (`ReqwestTransport`) could not be built.
+    #[error("building the default HTTP transport")]
+    DefaultTransport(#[source] TransportError),
     /// The round is past due (plus grace) and no relay produced a valid beacon.
     #[error("no relay produced a beacon: {}", list(.0))]
     Relays(Vec<RelayError>),
@@ -212,14 +232,27 @@ pub enum RelayErrorKind {
     /// The relay served something that is not a valid beacon for the round.
     #[error("invalid beacon: {0}")]
     Invalid(crate::Error),
-    /// A connection or protocol error.
-    #[error("{0}")]
-    Transport(Box<dyn core::error::Error + Send + Sync>),
+    /// A transport failure other than a timeout or an oversized body (those
+    /// are [`RelayErrorKind::Timeout`] and [`RelayErrorKind::BodyTooLarge`]).
+    #[error(transparent)]
+    Transport(TransportError),
 }
+
+impl From<TransportError> for RelayErrorKind {
+    fn from(e: TransportError) -> Self {
+        match e.kind() {
+            TransportErrorKind::Timeout => Self::Timeout,
+            TransportErrorKind::TooLarge => Self::BodyTooLarge,
+            _ => Self::Transport(e),
+        }
+    }
+}
+
+type SharedTransport = Arc<dyn HttpTransport>;
 
 enum Transport {
     Http {
-        http: reqwest::Client,
+        transport: SharedTransport,
         relays: Vec<Relay>,
     },
     #[cfg(feature = "test-chain")]
@@ -264,7 +297,7 @@ pub struct ClientBuilder {
     strategy: Strategy,
     request_timeout: Duration,
     user_agent: String,
-    http: Option<reqwest::Client>,
+    transport: Option<SharedTransport>,
     clock: Arc<dyn Clock>,
     #[cfg(feature = "test-chain")]
     test: Option<TestChain>,
@@ -297,8 +330,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Per-request timeout (default 5 s). Applied to each request, so it also
-    /// covers a client passed with [`ClientBuilder::http_client`].
+    /// Per-request timeout (default 5 s). Enforced by the client around each
+    /// [`HttpTransport::send`], so it holds for any transport.
     ///
     /// Asked for the next round, a relay may hold the request until that round
     /// is published: up to a full period (3 s on `quicknet`, 30 s on
@@ -317,10 +350,13 @@ impl ClientBuilder {
         self
     }
 
-    /// Uses this HTTP client instead of building one.
+    /// Sends requests through `transport` instead of the default
+    /// `ReqwestTransport`: e.g. `ReqwestTransport::new(client)` over a
+    /// `reqwest::Client` with a proxy, or your own [`HttpTransport`].
+    /// Mandatory without the `reqwest` feature.
     #[must_use]
-    pub fn http_client(mut self, http: reqwest::Client) -> Self {
-        self.http = Some(http);
+    pub fn http_transport(mut self, transport: impl HttpTransport) -> Self {
+        self.transport = Some(Arc::new(transport));
         self
     }
 
@@ -347,9 +383,10 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// [`Error::Chain`] for unverifiable chains, [`Error::Config`] with no
-    /// relays, an invalid relay URL or user agent, or no TLS feature enabled
-    /// and no [`ClientBuilder::http_client`] client, and [`Error::Http`] if the HTTP
-    /// client cannot be built.
+    /// relays, an invalid relay URL or user agent, or no
+    /// [`ClientBuilder::http_transport`] and no default (the `reqwest` feature
+    /// with a TLS feature), and [`Error::DefaultTransport`] if the default
+    /// transport cannot be built.
     pub fn build(self) -> Result<Client, Error> {
         let verifier = Verifier::new(&self.chain).map_err(Error::Chain)?;
         let hash = self.chain.hash();
@@ -376,14 +413,15 @@ impl ClientBuilder {
                 }
                 // Configuration errors must fail here, not as retryable relay errors.
                 for relay in &relays {
-                    reqwest::Url::parse(&relay.round_url(&hash, RoundRef::Latest))
-                        .map_err(|_| Error::Config("invalid relay URL"))?;
+                    if !valid_url(&relay.round_url(&hash, RoundRef::Latest)) {
+                        return Err(Error::Config("invalid relay URL"));
+                    }
                 }
-                let http = match self.http {
-                    Some(http) => http,
-                    None => default_http()?,
+                let transport = match self.transport {
+                    Some(transport) => transport,
+                    None => default_transport()?,
                 };
-                Transport::Http { http, relays }
+                Transport::Http { transport, relays }
             }
         };
 
@@ -405,15 +443,52 @@ impl ClientBuilder {
     }
 }
 
-#[cfg(any(feature = "default-tls", feature = "rustls", feature = "native-tls"))]
-fn default_http() -> Result<reqwest::Client, Error> {
-    reqwest::Client::builder().build().map_err(Error::Http)
+/// An absolute `http(s)` URL with a host, as every parser that sees it later
+/// accepts it: `Uri` in the request (which alone accepts `http://[zz]`) and,
+/// in reqwest, `Url`. The same URLs are valid whatever the features.
+fn valid_url(url: &str) -> bool {
+    let Ok(uri) = url.parse::<::http::Uri>() else {
+        return false;
+    };
+    let scheme_ok = matches!(uri.scheme_str(), Some("http" | "https"));
+    let host_ok = match uri.host() {
+        None | Some("") => false,
+        Some(host) if host.starts_with('[') => host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .is_some_and(|h| h.parse::<core::net::Ipv6Addr>().is_ok()),
+        Some(_) => true,
+    };
+    let ok = scheme_ok && host_ok;
+    #[cfg(feature = "reqwest")]
+    let ok = ok && reqwest::Url::parse(url).is_ok_and(|u| u.has_host());
+    ok
 }
 
-#[cfg(not(any(feature = "default-tls", feature = "rustls", feature = "native-tls")))]
-fn default_http() -> Result<reqwest::Client, Error> {
+#[cfg(all(
+    feature = "reqwest",
+    any(feature = "default-tls", feature = "rustls", feature = "native-tls")
+))]
+fn default_transport() -> Result<SharedTransport, Error> {
+    ReqwestTransport::try_default()
+        .map(|t| Arc::new(t) as SharedTransport)
+        .map_err(Error::DefaultTransport)
+}
+
+#[cfg(all(
+    feature = "reqwest",
+    not(any(feature = "default-tls", feature = "rustls", feature = "native-tls"))
+))]
+fn default_transport() -> Result<SharedTransport, Error> {
     Err(Error::Config(
-        "no TLS backend: enable the `default-tls`, `rustls` or `native-tls` feature, or pass a reqwest::Client",
+        "no TLS backend: enable the `default-tls`, `rustls` or `native-tls` feature, or pass a transport",
+    ))
+}
+
+#[cfg(not(feature = "reqwest"))]
+fn default_transport() -> Result<SharedTransport, Error> {
+    Err(Error::Config(
+        "no default transport: enable the `reqwest` feature, or pass a transport",
     ))
 }
 
@@ -434,7 +509,7 @@ impl Client {
             strategy: Strategy::default(),
             request_timeout: Duration::from_secs(5),
             user_agent: concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).into(),
-            http: None,
+            transport: None,
             clock: Arc::new(SystemClock),
             #[cfg(feature = "test-chain")]
             test: None,
@@ -464,7 +539,7 @@ impl Client {
     /// [`GRACE`] (judged when the attempt finishes), and
     /// [`Error::Relays`] after that. [`Error::RoundZero`] for round 0.
     pub fn fetch(&self, round: u64) -> impl Future<Output = Result<Fetch, Error>> + Send {
-        rt::send(self.fetch_inner(round))
+        assume_send(self.fetch_inner(round))
     }
 
     async fn fetch_inner(&self, round: u64) -> Result<Fetch, Error> {
@@ -491,7 +566,7 @@ impl Client {
     /// before, so it never returns "not yet". Before the chain has started (or
     /// before round 1 is available): [`Error::NotStarted`].
     pub fn latest(&self) -> impl Future<Output = Result<VerifiedBeacon, Error>> + Send {
-        rt::send(self.latest_inner())
+        assume_send(self.latest_inner())
     }
 
     async fn latest_inner(&self) -> Result<VerifiedBeacon, Error> {
@@ -529,16 +604,12 @@ impl Client {
         round: u64,
         timeout: Duration,
     ) -> impl Future<Output = Result<VerifiedBeacon, Error>> + Send {
-        rt::send(self.wait_for_inner(round, timeout))
+        assume_send(self.wait_for_inner(round, timeout))
     }
 
     async fn wait_for_inner(&self, round: u64, timeout: Duration) -> Result<VerifiedBeacon, Error> {
         let round = NonZeroU64::new(round).ok_or(Error::RoundZero)?;
-        let now = rt::Instant::now();
-        // A huge timeout means "no timeout" (and must not overflow).
-        let deadline = now
-            .checked_add(timeout)
-            .unwrap_or_else(|| now + Duration::from_hours(100 * 365 * 24));
+        let deadline = deadline_after(timeout);
         if let Some(due) = self.inner.schedule.round_time(round.get()) {
             let wait = due.saturating_duration_since(self.now());
             if !wait.is_zero() {
@@ -574,7 +645,9 @@ impl Client {
 
     async fn attempt(&self, round: NonZeroU64) -> Attempt {
         match &self.inner.transport {
-            Transport::Http { http, relays } => self.attempt_http(http, relays, round).await,
+            Transport::Http { transport, relays } => {
+                self.attempt_http(transport.as_ref(), relays, round).await
+            }
             #[cfg(feature = "test-chain")]
             Transport::Test(chain) => {
                 let due = self.inner.schedule.round_time(round.get());
@@ -610,13 +683,13 @@ impl Client {
 
     async fn attempt_http(
         &self,
-        http: &reqwest::Client,
+        transport: &dyn HttpTransport,
         relays: &[Relay],
         round: NonZeroU64,
     ) -> Attempt {
         let ask = |i: usize| {
             let relay = &relays[i];
-            async move { (i, self.ask(http, relay, round).await) }
+            async move { (i, self.ask(transport, relay, round).await) }
         };
         let mut errors: Vec<(usize, RelayErrorKind)> = Vec::new();
         let mut inflight = FuturesUnordered::new();
@@ -668,38 +741,31 @@ impl Client {
 
     async fn ask(
         &self,
-        http: &reqwest::Client,
+        transport: &dyn HttpTransport,
         relay: &Relay,
         round: NonZeroU64,
     ) -> Result<VerifiedBeacon, RelayErrorKind> {
         let req = RoundRef::Number(round);
         let url = relay.round_url(&self.inner.hash, req);
-        let requested = self.now();
-        let resp = http
-            .get(&url)
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(url)
             .header(USER_AGENT, &self.inner.user_agent)
-            .timeout(self.inner.timeout)
-            .send()
+            .body(Bytes::new())
+            // Unreachable: the URL and user agent are validated by `build()`.
+            .map_err(|e| TransportError::with_source(TransportErrorKind::Other, e))?;
+        let requested = self.now();
+        // The timeout is the client's, so it holds for any transport.
+        let deadline = deadline_after(self.inner.timeout);
+        let resp = rt::timeout_at(deadline, transport.send(request, MAX_BODY_LEN))
             .await
-            .map_err(transport_error)?;
+            .ok_or(RelayErrorKind::Timeout)??;
         let status = resp.status().as_u16();
-        let mut body = Vec::new();
-        if resp.status().is_success() {
-            if resp
-                .content_length()
-                .is_some_and(|n| n > MAX_BODY_LEN as u64)
-            {
-                return Err(RelayErrorKind::BodyTooLarge);
-            }
-            let mut chunks = pin!(rt::chunks(resp));
-            while let Some(chunk) = chunks.next().await.transpose().map_err(transport_error)? {
-                let chunk = chunk.as_ref();
-                if body.len() + chunk.len() > MAX_BODY_LEN {
-                    return Err(RelayErrorKind::BodyTooLarge);
-                }
-                body.extend_from_slice(chunk);
-            }
-        }
+        let body = if resp.status().is_success() {
+            resp.into_body()
+        } else {
+            Bytes::new()
+        };
         let answer = http::classify(req, status, &body, &self.inner.schedule, requested);
         match answer {
             Ok(Answer::Beacon(beacon)) => self
@@ -732,12 +798,11 @@ fn collect(relays: &[Relay], mut errors: Vec<(usize, RelayErrorKind)>) -> Vec<Re
         .collect()
 }
 
-fn transport_error(e: reqwest::Error) -> RelayErrorKind {
-    if e.is_timeout() {
-        RelayErrorKind::Timeout
-    } else {
-        RelayErrorKind::Transport(Box::new(e))
-    }
+/// `timeout` from now; a huge timeout means "no timeout" (and must not overflow).
+fn deadline_after(timeout: Duration) -> rt::Instant {
+    let now = rt::Instant::now();
+    now.checked_add(timeout)
+        .unwrap_or_else(|| now + Duration::from_hours(100 * 365 * 24))
 }
 
 /// What the client needs from the async runtime.
@@ -745,25 +810,11 @@ fn transport_error(e: reqwest::Error) -> RelayErrorKind {
 mod rt {
     use core::future::Future;
 
-    use futures_util::Stream;
     pub(super) use tokio::time::{Instant, sleep};
 
     /// `f`, at most until `deadline`.
     pub(super) async fn timeout_at<F: Future>(deadline: Instant, f: F) -> Option<F::Output> {
         tokio::time::timeout_at(deadline, f).await.ok()
-    }
-
-    /// The futures are `Send` already.
-    pub(super) fn send<F: Future + Send>(f: F) -> F {
-        f
-    }
-
-    pub(super) fn chunks(
-        resp: reqwest::Response,
-    ) -> impl Stream<Item = reqwest::Result<impl AsRef<[u8]>>> {
-        futures_util::stream::unfold(resp, |mut resp| async move {
-            resp.chunk().await.transpose().map(|chunk| (chunk, resp))
-        })
     }
 }
 
@@ -772,11 +823,7 @@ mod rt {
 mod rt {
     use core::{future::Future, pin::pin, time::Duration};
 
-    use futures_util::{
-        Stream,
-        future::{Either, select},
-    };
-    use send_wrapper::SendWrapper;
+    use futures_util::future::{Either, select};
     pub(super) use web_time::Instant;
 
     /// `setTimeout` takes at most 2^31 - 1 ms (and fires at once beyond that).
@@ -798,18 +845,6 @@ mod rt {
             Either::Right(_) => None,
         }
     }
-
-    /// JS futures are not `Send`, but wasm32-unknown-unknown is single-threaded:
-    /// nothing can move them to another thread (`SendWrapper` would panic).
-    pub(super) fn send<F: Future>(f: F) -> SendWrapper<F> {
-        SendWrapper::new(f)
-    }
-
-    pub(super) fn chunks(
-        resp: reqwest::Response,
-    ) -> impl Stream<Item = reqwest::Result<impl AsRef<[u8]>>> {
-        resp.bytes_stream()
-    }
 }
 
 /// ±20 % jitter, without a random number generator: clock microseconds mixed
@@ -828,8 +863,9 @@ fn jitter(d: Duration) -> Duration {
 #[allow(dead_code)]
 fn assert_send(client: &Client) {
     fn send<T: Send>(_: T) {}
+    fn send_sync<T: Send + Sync>(_: T) {}
     send(client.fetch(1));
     send(client.latest());
     send(client.wait_for(1, Duration::ZERO));
-    send(client.clone());
+    send_sync(client.clone());
 }

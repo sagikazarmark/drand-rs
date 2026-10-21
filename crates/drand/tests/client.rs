@@ -1,18 +1,17 @@
-//! Client behavior against in-process mock relays.
+//! Client behavior against in-process mock relays, through `ReqwestTransport`.
 
 #![cfg(all(
-    feature = "client",
+    feature = "reqwest",
     feature = "test-chain",
     not(target_arch = "wasm32")
 ))]
 
+mod common;
+
 use std::{
     net::SocketAddr,
     num::NonZeroU32,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -22,56 +21,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::get,
 };
+use common::{FixedClock, GENESIS, due_ms, grace_ms, signed, test_chain};
 use drand::{
     Beacon, ChainInfo, Error as CoreError, Scheme, TestChain, UnixTime, chains,
-    client::{Client, Clock, Error, Fetch, RelayErrorKind, Strategy},
-    http::{GRACE, MAX_BODY_LEN, Relay},
+    client::{Client, Error, Fetch, RelayErrorKind, ReqwestTransport, Strategy},
+    http::{MAX_BODY_LEN, Relay},
 };
-
-const GENESIS: i64 = 1_700_000_000;
-
-fn test_chain() -> TestChain {
-    TestChain::new(
-        [3; 32],
-        Scheme::BlsUnchainedG1Rfc9380,
-        NonZeroU32::new(3).unwrap(),
-        GENESIS,
-        "mock",
-    )
-    .unwrap()
-}
-
-/// A settable clock.
-#[derive(Clone, Default)]
-struct FixedClock(Arc<AtomicI64>);
-
-impl FixedClock {
-    fn at(ms: i64) -> Self {
-        Self(Arc::new(AtomicI64::new(ms)))
-    }
-    fn set(&self, ms: i64) {
-        self.0.store(ms, Ordering::SeqCst);
-    }
-}
-
-impl Clock for FixedClock {
-    fn now(&self) -> UnixTime {
-        UnixTime::from_millis(self.0.load(Ordering::SeqCst))
-    }
-}
-
-fn grace_ms() -> i64 {
-    i64::try_from(GRACE.as_millis()).unwrap()
-}
-
-fn due_ms(round: u64) -> i64 {
-    test_chain()
-        .chain()
-        .schedule()
-        .round_time(round)
-        .unwrap()
-        .as_millis()
-}
 
 struct Reply {
     status: u16,
@@ -139,16 +94,12 @@ async fn relay(
 fn client(relays: Vec<Relay>, clock: FixedClock) -> Client {
     Client::builder(test_chain().chain().clone())
         .relays(relays)
-        .http_client(reqwest::Client::new())
+        .http_transport(ReqwestTransport::new(reqwest::Client::new()))
         .clock(clock)
         .strategy(Strategy::hedged(Duration::from_millis(50)))
         .request_timeout(Duration::from_secs(2))
         .build()
         .unwrap()
-}
-
-fn signed(round: u64) -> Beacon {
-    test_chain().sign(round)
 }
 
 #[tokio::test]
@@ -271,6 +222,19 @@ async fn every_relay_failing_is_reported_per_relay() {
 }
 
 #[tokio::test]
+async fn the_body_limit_applies_to_error_responses_too() {
+    let big = relay(|_| Reply::status(500, " ".repeat(MAX_BODY_LEN + 1)), None).await;
+    let c = client(
+        vec![Relay::v1(&big).unwrap()],
+        FixedClock::at(due_ms(10) + 60_000),
+    );
+    let Error::Relays(errors) = c.fetch(10).await.unwrap_err() else {
+        panic!()
+    };
+    assert!(matches!(errors[0].kind, RelayErrorKind::BodyTooLarge));
+}
+
+#[tokio::test]
 async fn slow_relays_are_hedged() {
     let slow = relay(
         |r| Reply::ok(&signed(r)).delayed(Duration::from_secs(3)),
@@ -280,7 +244,7 @@ async fn slow_relays_are_hedged() {
     let fast = relay(|r| Reply::ok(&signed(r)), None).await;
     let c = Client::builder(test_chain().chain().clone())
         .relays(vec![Relay::v1(&slow).unwrap(), Relay::v1(&fast).unwrap()])
-        .http_client(reqwest::Client::new())
+        .http_transport(ReqwestTransport::new(reqwest::Client::new()))
         .clock(FixedClock::at(due_ms(10)))
         .strategy(Strategy::hedged(Duration::from_millis(100)))
         .build()
@@ -303,7 +267,7 @@ async fn request_timeout_applies_to_passed_clients() {
     .await;
     let c = Client::builder(test_chain().chain().clone())
         .relays(vec![Relay::v1(&slow).unwrap()])
-        .http_client(reqwest::Client::new())
+        .http_transport(ReqwestTransport::new(reqwest::Client::new()))
         .clock(FixedClock::at(due_ms(10) + 60_000))
         .request_timeout(Duration::from_millis(200))
         .build()
@@ -350,7 +314,7 @@ async fn round_zero_and_configuration_errors_are_terminal() {
 
     // A chain that is not built in has no default relays.
     let err = Client::builder(test_chain().chain().clone())
-        .http_client(reqwest::Client::new())
+        .http_transport(ReqwestTransport::new(reqwest::Client::new()))
         .build()
         .unwrap_err();
     assert!(matches!(err, Error::Config(_)));
@@ -367,56 +331,6 @@ async fn round_zero_and_configuration_errors_are_terminal() {
         .build()
         .unwrap_err();
     assert!(matches!(err, Error::Config(_)));
-}
-
-#[cfg(not(any(feature = "default-tls", feature = "rustls", feature = "native-tls")))]
-#[test]
-fn building_without_tls_or_a_client_fails() {
-    let err = Client::builder(chains::quicknet()).build().unwrap_err();
-    assert!(matches!(err, Error::Config(_)));
-}
-
-/// A clock that follows tokio's (paused) time.
-#[derive(Clone)]
-struct TokioClock {
-    base_ms: i64,
-    start: tokio::time::Instant,
-}
-
-impl Clock for TokioClock {
-    fn now(&self) -> UnixTime {
-        UnixTime::from_millis(
-            self.base_ms + i64::try_from(self.start.elapsed().as_millis()).unwrap(),
-        )
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn wait_for_sleeps_until_due_with_the_test_transport() {
-    let tc = test_chain();
-    let clock = TokioClock {
-        base_ms: due_ms(50) - 10_000,
-        start: tokio::time::Instant::now(),
-    };
-    let c = Client::builder(tc.chain().clone())
-        .test_transport(tc)
-        .clock(clock.clone())
-        .build()
-        .unwrap();
-    assert!(matches!(c.fetch(50).await.unwrap(), Fetch::NotYet { .. }));
-    let b = c.wait_for(50, Duration::from_secs(30)).await.unwrap();
-    assert_eq!(b.round(), 50);
-    assert!(clock.now().as_millis() >= due_ms(50));
-    // A round far in the future times out, reporting "not yet".
-    let err = c
-        .wait_for(1_000_000, Duration::from_secs(5))
-        .await
-        .unwrap_err();
-    let Error::Timeout { last, .. } = &err else {
-        panic!("{err}")
-    };
-    assert!(matches!(last[0].kind, RelayErrorKind::NotYet));
-    assert!(err.is_retryable());
 }
 
 #[tokio::test]
@@ -442,24 +356,6 @@ async fn bodies_without_content_length_are_capped_too() {
 }
 
 #[tokio::test]
-async fn configuration_errors_fail_at_build_time() {
-    let base = || {
-        Client::builder(test_chain().chain().clone())
-            .http_client(reqwest::Client::new())
-            .relays(vec![Relay::v1("http://127.0.0.1:9").unwrap()])
-    };
-    assert!(matches!(
-        base().user_agent("bad\nagent").build(),
-        Err(Error::Config(_))
-    ));
-    let odd = Relay::v1("http://[zz]").unwrap();
-    assert!(matches!(
-        base().relays(vec![odd]).build(),
-        Err(Error::Config(_))
-    ));
-}
-
-#[tokio::test]
 async fn wait_for_honors_its_deadline_and_huge_timeouts() {
     // Relays that accept connections and never answer.
     let hang = relay(
@@ -469,7 +365,7 @@ async fn wait_for_honors_its_deadline_and_huge_timeouts() {
     .await;
     let c = Client::builder(test_chain().chain().clone())
         .relays(vec![Relay::v1(&hang).unwrap(), Relay::v2(&hang).unwrap()])
-        .http_client(reqwest::Client::new())
+        .http_transport(ReqwestTransport::new(reqwest::Client::new()))
         .clock(FixedClock::at(due_ms(10) + 60_000))
         .build()
         .unwrap();
@@ -484,13 +380,4 @@ async fn wait_for_honors_its_deadline_and_huge_timeouts() {
         "{:?}",
         started.elapsed()
     );
-
-    // Duration::MAX means "no timeout" and must not overflow.
-    let tc = test_chain();
-    let c = Client::builder(tc.chain().clone())
-        .test_transport(tc)
-        .clock(FixedClock::at(due_ms(10)))
-        .build()
-        .unwrap();
-    assert_eq!(c.wait_for(10, Duration::MAX).await.unwrap().round(), 10);
 }

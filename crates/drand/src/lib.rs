@@ -13,9 +13,11 @@
 //! With the `client` feature, `client::Client` fetches beacons from several
 //! relays with hedged failover: on tokio on native targets, and on the JS
 //! host's `fetch` and timers on `wasm32-unknown-unknown` (browsers, Cloudflare
-//! Workers); not on WASI. Its built-in HTTP client uses reqwest's default TLS
-//! backend (the default `default-tls` feature); pick another with `rustls` or
-//! `native-tls`, or bring your own `reqwest::Client`.
+//! Workers); not on WASI. HTTP goes through `client::HttpTransport`. The
+//! `reqwest` feature adds the default transport, `client::ReqwestTransport`,
+//! on reqwest's default TLS backend (the default `default-tls` feature; pick
+//! another with `rustls` or `native-tls`). Without it, bring your own
+//! transport and reqwest stays out of the build.
 //!
 //! # Trust model
 //!

@@ -17,10 +17,12 @@ bls12-381 = ["dep:ark-bls12-381", "dep:ark-ec", "dep:ark-ff", "dep:ark-serialize
 std = []
 ## The async HTTP client: native targets (on tokio) and wasm32-unknown-unknown
 ## (on the JS host's `fetch` and `setTimeout`: browsers, Cloudflare Workers).
-## Compiled out on WASI.
+## Compiled out on WASI. HTTP goes through the `HttpTransport` trait; without
+## `reqwest`, `ClientBuilder::http_transport` is mandatory.
 client = [
     "std",
-    "dep:reqwest",
+    "dep:bytes",
+    "dep:http",
     "dep:tokio",
     "dep:futures-util",
     "dep:tracing",
@@ -28,9 +30,13 @@ client = [
     "dep:gloo-timers",
     "dep:send_wrapper",
 ]
-## TLS for the client's built-in `reqwest::Client` (or pass your own). These do
-## nothing without `client`. `default-tls` is reqwest's default backend (rustls
-## in reqwest 0.13); to pick another, disable default features.
+## The default transport, `ReqwestTransport` (implies `client`). The only place
+## `reqwest` shows in the API; leave it off to bring your own `HttpTransport`
+## and keep reqwest out of the build.
+reqwest = ["client", "dep:reqwest"]
+## TLS for `ReqwestTransport`. These do nothing without `reqwest`. `default-tls`
+## is reqwest's default backend (rustls in reqwest 0.13); to pick another,
+## disable default features.
 default-tls = ["reqwest?/default-tls"]
 rustls = ["reqwest?/rustls"]
 native-tls = ["reqwest?/native-tls"]
@@ -51,7 +57,10 @@ thiserror = { version = "2", default-features = false }
 
 # The client's dependencies, by target: everywhere it builds, native only, wasm only.
 [target.'cfg(any(not(target_arch = "wasm32"), target_os = "unknown"))'.dependencies]
+# `http::Request<Bytes>` / `http::Response<Bytes>` are the `HttpTransport` trait's types.
+bytes = { version = "1", default-features = false, optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+http = { version = "1", default-features = false, features = ["std"], optional = true }
 reqwest = { version = "0.13", default-features = false, optional = true }
 tracing = { version = "0.1", default-features = false, features = ["std"], optional = true }
 # `std::time` on native; `Date.now()` / `performance.now()` on wasm, where `std` panics.
@@ -64,7 +73,8 @@ tokio = { version = "1", features = ["time"], optional = true }
 gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 # Bodies are streamed there too, to stop reading past `MAX_BODY_LEN`.
 reqwest = { version = "0.13", default-features = false, features = ["stream"], optional = true }
-# JS futures are not `Send`; wasm32-unknown-unknown is single-threaded.
+# JS futures (`fetch`, `setTimeout`) are not `Send`; wasm32-unknown-unknown is
+# single-threaded, so the client and `ReqwestTransport` wrap them (`assume_send`).
 send_wrapper = { version = "0.6", features = ["futures"], optional = true }
 
 [dev-dependencies]
@@ -74,6 +84,8 @@ serde_json = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+bytes = "1"
+http = "1"
 # Seeds from the OS RNG: getrandom 0.3, which needs a `--cfg` on wasm32-unknown-unknown.
 proptest = "1"
 reqwest = { version = "0.13", default-features = false }
@@ -81,7 +93,7 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "test-u
 
 [[example]]
 name = "fetch"
-required-features = ["client", "rustls"]
+required-features = ["reqwest", "rustls"]
 
 [[example]]
 name = "verify"

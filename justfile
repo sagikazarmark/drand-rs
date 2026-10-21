@@ -34,6 +34,8 @@ clippy:
 # Run tests.
 test:
     cargo hack test {{ hack }} --each-feature --locked
+    # The client without reqwest (bring-your-own transport): not an `--each-feature` combination.
+    cargo test -p drand --no-default-features --features client,test-chain --locked
 
 # Run rustdoc.
 [env("RUSTDOCFLAGS", "--deny warnings")]

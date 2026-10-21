@@ -14,7 +14,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use drand::{ChainInfo, Scheme, TestChain, Verifier, chains, client::Client, http::Relay};
+use drand::{
+    ChainInfo, Scheme, TestChain, Verifier, chains,
+    client::{Client, HttpTransport, TransportError, TransportErrorKind, TransportFuture},
+    http::Relay,
+};
 use restate_drand::{AwaitError, CLOCK_STEP, Drand, FETCH_STEP};
 use restate_e2e_harness::{Call, ReusePolicy, ServerSpec, launcher_or_skip};
 use restate_sdk::{endpoint::Endpoint, prelude::*};
@@ -159,8 +163,8 @@ async fn unavailable_after_the_fetch_budget_then_retryable_on_the_same_round() {
     }
     // quicknet behind an unreachable relay.
     let client = Client::builder(chains::quicknet())
-        .relays(vec![Relay::v1("http://127.0.0.1:9").unwrap()])
-        .http_client(reqwest_client())
+        .relays(vec![Relay::v1("http://unreachable").unwrap()])
+        .http_transport(Unreachable)
         .build()
         .unwrap();
     let drand = Drand::new(client)
@@ -224,6 +228,16 @@ async fn cancellation_propagates_instead_of_reporting_unavailable() {
     assert!(failure.contains("cancelled"), "{failure:?}");
 }
 
-fn reqwest_client() -> drand::client::reqwest::Client {
-    drand::client::reqwest::Client::new()
+/// A transport whose every request fails to connect.
+struct Unreachable;
+
+impl HttpTransport for Unreachable {
+    fn send(&self, _: http::Request<bytes::Bytes>, _: usize) -> TransportFuture<'_> {
+        Box::pin(async {
+            Err(TransportError::with_source(
+                TransportErrorKind::Connect,
+                "connection refused",
+            ))
+        })
+    }
 }
