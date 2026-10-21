@@ -9,8 +9,8 @@
 
 | Crate | | |
 |---|---|---|
-| [`drand`](crates/drand) | [![crates.io](https://img.shields.io/crates/v/drand?style=flat-square)](https://crates.io/crates/drand) [![docs.rs](https://img.shields.io/docsrs/drand?style=flat-square)](https://docs.rs/drand) | A `no_std`/wasm verifier core (chain parameters, round arithmetic, v1/v2 beacon parsing, strict BLS verification) plus an async multi-relay client. |
-| [`restate-drand`](crates/restate-drand) | [![crates.io](https://img.shields.io/crates/v/restate-drand?style=flat-square)](https://crates.io/crates/restate-drand) [![docs.rs](https://img.shields.io/docsrs/restate-drand?style=flat-square)](https://docs.rs/restate-drand) | drand randomness in [Restate](https://restate.dev) handlers: commit to a future round, wait durably, fetch and verify the beacon. |
+| [`drand`](crates/drand) | A `no_std`/wasm verifier core (chain parameters, round arithmetic, v1/v2 beacon parsing, strict BLS verification) plus an async multi-relay client. | [![crates.io](https://img.shields.io/crates/v/drand?style=flat-square)](https://crates.io/crates/drand) [![docs.rs](https://img.shields.io/docsrs/drand?style=flat-square)](https://docs.rs/drand) |
+| [`restate-drand`](crates/restate-drand) | drand randomness in [Restate](https://restate.dev) handlers: commit to a future round, wait durably, fetch and verify the beacon. | [![crates.io](https://img.shields.io/crates/v/restate-drand?style=flat-square)](https://crates.io/crates/restate-drand) [![docs.rs](https://img.shields.io/docsrs/restate-drand?style=flat-square)](https://docs.rs/restate-drand) |
 
 See each crate's README for usage, features and the security model.
 
