@@ -10,9 +10,12 @@ keywords = ["restate", "drand", "randomness", "beacon", "durable"]
 categories = ["asynchronous", "network-programming", "wasm"]
 
 [features]
-default = ["default-tls"]
-## TLS for the built-in drand client (or pass your own `reqwest::Client`).
-## `default-tls` is reqwest's default backend (rustls in reqwest 0.13).
+default = ["reqwest", "default-tls"]
+## The drand client's default transport (reqwest). Leave it off to bring your
+## own `HttpTransport` and keep reqwest out of the build.
+reqwest = ["drand/reqwest"]
+## TLS for the reqwest transport. `default-tls` is reqwest's default backend
+## (rustls in reqwest 0.13).
 default-tls = ["drand/default-tls"]
 rustls = ["drand/rustls"]
 native-tls = ["drand/native-tls"]
@@ -36,6 +39,8 @@ hex = "0.4"
 
 # The e2e tests run a real restate-server: unix only.
 [target.'cfg(unix)'.dev-dependencies]
+bytes = "1"
+http = "1"
 restate-e2e-harness = "0.3"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

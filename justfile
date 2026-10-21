@@ -4,6 +4,10 @@ hack := "--workspace --exclude-features native-tls"
 
 wasm := "wasm32-unknown-unknown"
 
+# The client without reqwest (bring-your-own transport): not an `--each-feature`
+# combination, so `clippy`, `test` and `doc` run it explicitly.
+no_reqwest := "-p drand --no-default-features --features client,test-chain"
+
 # List the recipes.
 [private]
 default:
@@ -30,15 +34,18 @@ check:
 clippy:
     cargo hack clippy {{ hack }} --each-feature --all-targets --locked -- --deny warnings
     cargo hack clippy {{ hack }} --each-feature --target {{ wasm }} --locked -- --deny warnings
+    cargo clippy {{ no_reqwest }} --all-targets --locked -- --deny warnings
 
 # Run tests.
 test:
     cargo hack test {{ hack }} --each-feature --locked
+    cargo test {{ no_reqwest }} --locked
 
 # Run rustdoc.
 [env("RUSTDOCFLAGS", "--deny warnings")]
 doc:
     cargo hack doc {{ hack }} --each-feature --no-deps --locked
+    cargo doc {{ no_reqwest }} --no-deps --locked
 
 # Audit dependencies for security advisories.
 audit:

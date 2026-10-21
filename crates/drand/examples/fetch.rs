@@ -1,7 +1,7 @@
 //! Fetches and verifies the latest quicknet beacon, then waits for the next one.
 //!
 //! ```sh
-//! cargo run --example fetch --features client,rustls
+//! cargo run --example fetch --features reqwest,rustls
 //! ```
 
 use std::time::Duration;

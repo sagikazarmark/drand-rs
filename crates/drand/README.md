@@ -26,7 +26,7 @@ println!("{}", hex::encode(verified.randomness()));
 use std::time::Duration;
 use drand::{chains, client::{Client, Fetch}};
 
-let client = Client::builder(chains::quicknet()).build()?; // feature: client
+let client = Client::builder(chains::quicknet()).build()?; // feature: reqwest
 let latest = client.latest().await?;
 let next = client.wait_for(latest.round() + 1, Duration::from_secs(30)).await?;
 match client.fetch(next.round() + 1).await? {
@@ -42,21 +42,44 @@ match client.fetch(next.round() + 1).await? {
 |---|---|---|
 | `bls12-381` | yes | Verification of the BLS12-381 schemes (`default`, `quicknet`) via arkworks |
 | `std` | no | `From<std::time::SystemTime>` for `UnixTime` (implied by `client`) |
-| `client` | no | Async `reqwest` client: tokio on native targets, `fetch` and `setTimeout` on `wasm32-unknown-unknown` (cfg'd out on WASI) |
-| `default-tls` | yes | TLS for the client's built-in `reqwest::Client`: reqwest's default backend (rustls) |
-| `rustls` / `native-tls` | no | A specific TLS backend for the built-in client |
+| `client` | no | Async multi-relay client: tokio on native targets, the JS host's `fetch` and `setTimeout` on `wasm32-unknown-unknown` (cfg'd out on WASI). Without `reqwest`, `http_transport` is mandatory |
+| `reqwest` | no | The default transport, `ReqwestTransport` (implies `client`); the only place `reqwest` appears |
+| `default-tls` | yes | TLS for `ReqwestTransport`: reqwest's default backend (rustls) |
+| `rustls` / `native-tls` | no | A specific TLS backend for `ReqwestTransport` |
 | `test-chain` | no | `TestChain`: signs beacons with a key derived from a public seed |
 
-The TLS features only matter with `client`; the core stays `no_std` either way. To choose a TLS backend, set
-`default-features = false` and enable `bls12-381`, `client` and `rustls` or `native-tls`, or pass your own
-`reqwest::Client` with `.http_client(..)`. On `wasm32-unknown-unknown` the JS host does TLS and these features do
-nothing.
+The TLS features only matter with `reqwest`; the core stays `no_std` either way. The usual setup is `features =
+["reqwest"]` (with the default `default-tls`). To choose a TLS backend, set `default-features = false` and
+enable `bls12-381`, `reqwest` and `rustls` or `native-tls`. To keep reqwest out of the build entirely, enable
+`client` alone and bring your own transport (below). On `wasm32-unknown-unknown` the JS host does TLS and the
+TLS features do nothing.
 
-The built-in HTTP client is `reqwest` without its other default features, so it ignores `HTTPS_PROXY`; pass your own
-client with `.http_client(..)` if you need a proxy.
+### Bring your own HTTP client
 
-The client's API exposes `reqwest` 0.13 (re-exported as `drand::client::reqwest`), so a breaking `reqwest`
-upgrade is a breaking release of this crate.
+The client sends requests through the `drand::client::HttpTransport` trait: one `http::Request<Bytes>` in, one
+buffered `http::Response<Bytes>` out. Relay selection, hedging, timeouts, response classification and
+verification all happen above it. The default transport, `ReqwestTransport` (feature `reqwest`), is `reqwest`
+without its other default features, so it ignores `HTTPS_PROXY`; wrap your own `reqwest::Client` if you need
+a proxy or custom TLS roots:
+
+```rust
+use drand::client::{Client, ReqwestTransport};
+
+let http = reqwest::Client::builder().build()?;
+let client = Client::builder(drand::chains::quicknet())
+    .http_transport(ReqwestTransport::new(http))
+    .build()?;
+```
+
+For another backend (a JS host's `fetch`, a `tower` service, an in-memory fake in tests), implement
+`HttpTransport` yourself and enable `client` without `reqwest`: reqwest is then not compiled at all, and
+`build()` fails with `Error::Config` if no transport is set. `ReqwestTransport::new` is the only place `reqwest`
+appears in this crate's API, so a `reqwest` upgrade only affects you if you pass one in.
+
+The client, `HttpTransport` and their futures are `Send` on every target, `wasm32` included, so they drop into
+`Send`-requiring frameworks (tower, axum, Restate) on Cloudflare Workers too. JS futures are not `Send`, but
+`wasm32-unknown-unknown` is single-threaded: the client wraps its own, and a transport over a JS API wraps
+its with `drand::client::assume_send`.
 
 Supported schemes: `pedersen-bls-chained`, `pedersen-bls-unchained`, `bls-unchained-g1-rfc9380`.
 `bls-bn254-unchained-on-g1` (evmnet) is parsed but not verified yet; the deprecated `bls-unchained-on-g1`
@@ -64,13 +87,13 @@ is reported as unsupported. MSRV: 1.92.
 
 ## Tests
 
-`cargo test -p drand --features client,test-chain` runs everything offline: real beacons from the live relays are checked
+`cargo test -p drand --features reqwest,test-chain` runs everything offline: real beacons from the live relays are checked
 in under `tests/data`, and client behavior is tested against in-process mock relays. The live tests talk to
 every public relay and API version separately (chain info, quicknet and `default` rounds, a future round) and
 are opt-in:
 
 ```sh
-cargo test -p drand --features client --test live -- --ignored
+cargo test -p drand --features reqwest --test live -- --ignored
 ```
 
 ## Security

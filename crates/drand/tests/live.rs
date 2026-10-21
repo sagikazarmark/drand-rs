@@ -1,7 +1,7 @@
 //! Live tests against the public drand relays. Ignored by default:
 //!
 //! ```sh
-//! cargo test -p drand --features client --test live -- --ignored
+//! cargo test -p drand --features reqwest --test live -- --ignored
 //! ```
 //!
 //! Every check runs against each relay and API version on its own (no hedging
@@ -9,7 +9,7 @@
 //! failing relays are reported together.
 
 #![cfg(all(
-    feature = "client",
+    feature = "reqwest",
     any(feature = "default-tls", feature = "rustls", feature = "native-tls"),
     not(target_arch = "wasm32")
 ))]
