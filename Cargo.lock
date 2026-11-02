@@ -1898,7 +1898,7 @@ dependencies = [
  "http",
  "restate-e2e-harness",
  "restate-ext",
- "restate-sdk",
+ "restate-sdk 0.13.0",
  "serde",
  "serde_json",
  "thiserror",
@@ -1915,7 +1915,7 @@ dependencies = [
  "hyper-util",
  "nix",
  "reqwest",
- "restate-sdk",
+ "restate-sdk 0.12.1",
  "rustix",
  "serde",
  "serde_json",
@@ -1928,7 +1928,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67913c01ef69d826f82a10880ef31beaa804af366598f7d87531b800085ff796"
 dependencies = [
- "restate-sdk",
+ "restate-sdk 0.12.1",
  "web-time",
 ]
 
@@ -1949,8 +1949,35 @@ dependencies = [
  "pin-project-lite",
  "prettyplease",
  "regress 0.10.5",
- "restate-sdk-macros",
- "restate-sdk-shared-core",
+ "restate-sdk-macros 0.12.1",
+ "restate-sdk-shared-core 7.0.3",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "typify",
+]
+
+[[package]]
+name = "restate-sdk"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d1aec0c891f86648ad71dc8696c9366b4fe5925570939b8a2558e74810d14b"
+dependencies = [
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "jsonptr",
+ "percent-encoding",
+ "pin-project-lite",
+ "prettyplease",
+ "regress 0.10.5",
+ "restate-sdk-macros 0.13.0",
+ "restate-sdk-shared-core 8.2.0",
  "serde",
  "serde_json",
  "syn 2.0.119",
@@ -1973,10 +2000,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "restate-sdk-macros"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3acd232e32159ca2007d8625c68171cd7b7db42a978c29475b47e3f115bb4db7"
+dependencies = [
+ "jiff",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "restate-sdk-shared-core"
 version = "7.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4a8731358ce185d1c9663d3ac97414acf7c0d642e5724864ade03fcccb85134"
+dependencies = [
+ "base64 0.22.1",
+ "bs58",
+ "bytes",
+ "bytes-utils",
+ "http",
+ "jsonwebtoken",
+ "pastey",
+ "prost",
+ "serde",
+ "sha2 0.11.0",
+ "strum",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "restate-sdk-shared-core"
+version = "8.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfd8d132e369af9310530b57c3e352a81cfad54e79d8d38fc5d7de9026ad2dfa"
 dependencies = [
  "base64 0.22.1",
  "bs58",

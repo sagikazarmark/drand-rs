@@ -27,7 +27,7 @@ tower = ["drand/tower"]
 anyhow = "1"
 drand = { workspace = true, features = ["bls12-381", "client"] }
 restate-ext = "0.3"
-restate-sdk = { version = "0.12", default-features = false }
+restate-sdk = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
