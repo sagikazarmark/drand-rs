@@ -26,8 +26,8 @@ tower = ["drand/tower"]
 [dependencies]
 anyhow = "1"
 drand = { workspace = true, features = ["bls12-381", "client"] }
-restate-ext = "0.3"
-restate-sdk = { version = "0.12", default-features = false }
+restate-ext = "0.4"
+restate-sdk = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
@@ -44,7 +44,7 @@ hex = "0.4"
 [target.'cfg(unix)'.dev-dependencies]
 bytes = "1"
 http = "1"
-restate-e2e-harness = "0.3"
+restate-e2e-harness = "0.4"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
