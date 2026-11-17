@@ -50,8 +50,8 @@ jobs:
       # cargo-release bumps from the version in Cargo.toml (the last release) and refuses to go back.
       # The version already in Cargo.toml changes nothing: a release that stopped after the Bump job
       # resumes with that version.
-      # A bump's version is known once cargo-release has written it: read it back from the manifest
-      # (every crate shares it).
+      # A bump's version is known once cargo-release has written it: read it back from the published
+      # crates, which must share it (a single crate, or a workspace with `shared-version`).
       # The outputs are written here, before the build: the build's scripts could rewrite its outputs.
       - name: Pick the version
         id: version
@@ -59,6 +59,8 @@ jobs:
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
         run: |
+          set -o pipefail
+
           if [[ "$BUMP" == version ]]; then
             target="${VERSION#v}"
 
@@ -75,8 +77,10 @@ jobs:
 
           cargo release version "$target" --execute --no-confirm
 
-          id="$(cargo pkgid -p drand)"
-          version="${id##*[#@]}"
+          version="$(cargo metadata --no-deps --format-version 1 --locked | jq -r '
+            [.packages[] | select(.publish != []) | .version] | unique
+            | if length == 1 then .[0] else error("the published crates do not share one version: \(join(", "))") end
+          ')"
 
           if git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null; then
             echo "::error::v$version is already released"
