@@ -5,7 +5,6 @@
 
   packages = with pkgs; [
     just
-    jq
 
     lld
     cargo-audit
