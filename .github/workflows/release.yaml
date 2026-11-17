@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump from the current version (ignored when version is set)
+        description: Bump the current version, or release the exact version below (version)
         type: choice
-        options: [none, patch, minor, major]
-        default: none
+        options: [version, patch, minor, major]
+        default: version
       version:
-        description: Exact version to release, X.Y.Z (overrides bump)
+        description: Exact version to release, X.Y.Z (only with bump set to version)
         type: string
         required: false
 
@@ -64,12 +64,18 @@ jobs:
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
         run: |
-          target="${VERSION#v}"
-          target="${target:-$BUMP}"
+          if [[ "$BUMP" == version ]]; then
+            target="${VERSION#v}"
 
-          if [[ "$target" == none ]]; then
-            echo "::error::Pick a bump or a version"
+            if [[ -z "$target" ]]; then
+              echo "::error::Set the version to release, or pick a bump"
+              exit 1
+            fi
+          elif [[ -n "$VERSION" ]]; then
+            echo "::error::Set bump to version to release an exact version (bump: $BUMP, version: $VERSION)"
             exit 1
+          else
+            target="$BUMP"
           fi
 
           cargo release version "$target" --execute --no-confirm
