@@ -25,13 +25,16 @@ defaults:
     shell: devenv shell -- bash -e {0}
 
 jobs:
-  package:
-    name: Package
+  # Checks the release before anything changes: picks the version and builds every crate from its
+  # package. Building runs the dependencies' build scripts and proc macros, so this job gets no write
+  # access, and hands the Bump job the version alone.
+  check:
+    name: Check
     runs-on: ubuntu-latest
 
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       # Every tag, for the check that the version is not released yet.
@@ -45,11 +48,13 @@ jobs:
         uses: sagikazarmark/setup-devenv@c36f9e57ca50ee1a6dad1a05a1a684e321f8096a # v0.3.0
 
       # cargo-release bumps from the version in Cargo.toml (the last release) and refuses to go back.
-      # The version already in Cargo.toml changes nothing: a release that stopped after the Commit job
+      # The version already in Cargo.toml changes nothing: a release that stopped after the Bump job
       # resumes with that version.
-      # `cargo publish --dry-run`, not `cargo package`: it skips `publish = false` crates.
-      - name: Bump the version and package every crate
-        id: bump
+      # A bump's version is known once cargo-release has written it: read it back from the manifest
+      # (every crate shares it).
+      # The outputs are written here, before the build: the build's scripts could rewrite its outputs.
+      - name: Pick the version
+        id: version
         env:
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
@@ -78,16 +83,20 @@ jobs:
             exit 1
           fi
 
-          cargo publish --dry-run --workspace --locked --allow-dirty
-
           {
             echo "version=$version"
             echo "tag=v$version"
           } >> "$GITHUB_OUTPUT"
 
-  commit:
-    name: Commit
-    needs: package
+      # `cargo publish --dry-run`, not `cargo package`: it skips `publish = false` crates. Catches files
+      # missing from the packages and dev-dependencies that `cargo publish` strips.
+      - name: Build every crate from its package
+        run: cargo publish --dry-run --workspace --locked --allow-dirty
+
+  # Bumps the version on the default branch. It builds nothing.
+  bump:
+    name: Bump
+    needs: check
     runs-on: ubuntu-latest
 
     permissions:
@@ -118,7 +127,7 @@ jobs:
       - name: Bump, commit and push the version
         id: commit
         env:
-          VERSION: ${{ needs.package.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           cargo release version "$VERSION" --execute --no-confirm
@@ -133,7 +142,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    needs: commit
+    needs: bump
     runs-on: ubuntu-latest
     environment: release
 
@@ -145,7 +154,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.commit.outputs.sha }}
+          ref: ${{ needs.bump.outputs.sha }}
           persist-credentials: false
 
       - name: Set up devenv
@@ -157,8 +166,8 @@ jobs:
 
       # cargo-release skips the versions already on crates.io, so a rerun publishes what is left. When
       # nothing is left it fails with "no packages selected": that is a successful rerun.
-      # The checkout is the commit's SHA, a detached HEAD: `--allow-branch HEAD`, as the Commit job has
-      # already checked the branch. The Package job has already built the packages (`--no-verify`).
+      # The checkout is the commit's SHA, a detached HEAD: `--allow-branch HEAD`, as the Bump job has
+      # already checked the branch. The Check job has already built the packages (`--no-verify`).
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
@@ -170,7 +179,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [package, commit, publish]
+    needs: [check, bump, publish]
     runs-on: ubuntu-latest
 
     permissions:
@@ -184,8 +193,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.package.outputs.tag }}
-          TARGET: ${{ needs.commit.outputs.sha }}
+          TAG: ${{ needs.check.outputs.tag }}
+          TARGET: ${{ needs.bump.outputs.sha }}
         run: |
           args=()
           [[ "$TAG" != *-* ]] || args+=(--prerelease)
