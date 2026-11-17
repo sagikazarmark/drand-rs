@@ -31,6 +31,7 @@ missing_crate_level_docs = "deny"
 # sign-commit = true
 sign-tag = true
 shared-version = true
+allow-branch = ["main"]
 pre-release-commit-message = "chore: release v{{version}}"
 tag-message = "Release {{version}}"
 tag-name = "v{{version}}"
