@@ -99,6 +99,9 @@ jobs:
       - name: Test
         run: just test
 
+      - name: Package
+        run: just package
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
