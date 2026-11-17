@@ -14,7 +14,7 @@ default:
     @just --list --unsorted
 
 # Run all CI jobs.
-ci: fmt check clippy test doc build audit deny
+ci: fmt check clippy test package doc build audit deny
 
 # Build the workspace.
 build:
@@ -40,6 +40,12 @@ clippy:
 test:
     cargo hack test {{ hack }} --each-feature --locked
     cargo test {{ no_reqwest }} --locked
+
+# `cargo publish` without uploading, as the Release workflow packages: catches files missing from
+# the packages and dev-dependencies that `cargo publish` strips.
+[doc("Build every crate from its packaged sources.")]
+package:
+    cargo publish --dry-run --workspace --locked
 
 # Run rustdoc.
 [env("RUSTDOCFLAGS", "--deny warnings")]
