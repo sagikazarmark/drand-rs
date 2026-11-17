@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Bump the current version, or release the exact version below (version)
+        description: Bump the latest release, or release the exact version below (version)
         type: choice
         options: [version, patch, minor, major]
         default: version
       version:
-        description: Exact version to release, X.Y.Z (only with bump set to version)
+        description: Exact version to release, X.Y.Z (only with bump version)
         type: string
         required: false
 
@@ -35,62 +35,35 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
-      # Every tag, for the check that the version is not released yet.
+      # From the inputs and the repository's tags, before any checkout: an exact version, or a bump of
+      # the latest release tag. It refuses a version that is already a tag, or older than the latest.
+      # A bump from the tag, not from Cargo.toml: a release that stopped after the Bump job (its version
+      # on main, untagged) resumes with the same bump.
+      - name: Pick the version
+        id: version
+        uses: sagikazarmark/next-version@fc0401d3719a172991c36ec41f5e43419c30e90f # v0.3.0
+        with:
+          bump: ${{ inputs.bump }}
+          version: ${{ inputs.version }}
+          allow-prerelease: true
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up devenv
         uses: sagikazarmark/setup-devenv@c36f9e57ca50ee1a6dad1a05a1a684e321f8096a # v0.3.0
 
-      # cargo-release bumps from the version in Cargo.toml (the last release) and refuses to go back.
-      # The version already in Cargo.toml changes nothing: a release that stopped after the Bump job
-      # resumes with that version.
-      # A bump's version is known once cargo-release has written it: read it back from the published
-      # crates, which must share it (a single crate, or a workspace with `shared-version`).
-      # The outputs are written here, before the build: the build's scripts could rewrite its outputs.
-      - name: Pick the version
-        id: version
+      # cargo-release refuses to go back (a version bumped ahead by hand on main), and the version
+      # already in Cargo.toml changes nothing.
+      - name: Bump the version
         env:
-          BUMP: ${{ inputs.bump }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          set -o pipefail
-
-          if [[ "$BUMP" == version ]]; then
-            target="${VERSION#v}"
-
-            if [[ -z "$target" ]]; then
-              echo "::error::Set the version to release, or pick a bump"
-              exit 1
-            fi
-          elif [[ -n "$VERSION" ]]; then
-            echo "::error::Set bump to version to release an exact version (bump: $BUMP, version: $VERSION)"
-            exit 1
-          else
-            target="$BUMP"
-          fi
-
-          cargo release version "$target" --execute --no-confirm
-
-          version="$(cargo metadata --no-deps --format-version 1 --locked | jq -r '
-            [.packages[] | select(.publish != []) | .version] | unique
-            | if length == 1 then .[0] else error("the published crates do not share one version: \(join(", "))") end
-          ')"
-
-          if git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null; then
-            echo "::error::v$version is already released"
-            exit 1
-          fi
-
-          {
-            echo "version=$version"
-            echo "tag=v$version"
-          } >> "$GITHUB_OUTPUT"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: cargo release version "$VERSION" --execute --no-confirm
 
       # `cargo publish --dry-run`, not `cargo package`: it skips `publish = false` crates. Catches files
       # missing from the packages and dev-dependencies that `cargo publish` strips.
@@ -189,7 +162,7 @@ jobs:
     permissions:
       contents: write
 
-    # Every release is newer than the last (cargo-release does not go back), so GitHub marks it the
+    # Every release is newer than the last (next-version refuses an older one), so GitHub marks it the
     # Latest release, unless it is a prerelease.
     steps:
       - name: Publish the GitHub Release
@@ -198,9 +171,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.check.outputs.tag }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
           TARGET: ${{ needs.bump.outputs.sha }}
-        run: |
-          args=()
-          [[ "$TAG" != *-* ]] || args+=(--prerelease)
-
-          gh release create "$TAG" --target "$TARGET" --generate-notes "${args[@]}"
+        run: gh release create "$TAG" --target "$TARGET" --generate-notes --prerelease="$PRERELEASE"
