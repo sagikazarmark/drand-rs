@@ -99,17 +99,18 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Bump and commit the version
+      # The tag comes with the GitHub Release (`--no-tag`).
+      # `cargo release commit` fails when there is nothing to commit: the version is already on main.
+      - name: Bump, commit and push the version
         id: commit
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          TAG: ${{ needs.version.outputs.tag }}
         run: |
           cargo release version "$VERSION" --execute --no-confirm
 
           if ! git diff --quiet; then
-            git commit -am "chore: release $TAG"
-            git push origin HEAD:main
+            cargo release commit --execute --no-confirm
+            cargo release push --no-tag --execute --no-confirm
           fi
 
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -138,18 +139,18 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
+      # cargo-release skips the versions already on crates.io, so a rerun publishes what is left. When
+      # nothing is left it fails with "no packages selected": that is a successful rerun.
+      # The checkout is the commit's SHA, a detached HEAD (`--allow-branch HEAD`); the Package job has
+      # already built the packages (`--no-verify`).
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          args=()
+          set -o pipefail
 
-          for crate in $(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.publish != []) | .name'); do
-            cargo info --registry crates-io "$crate@$VERSION" >/dev/null 2>&1 || args+=(-p "$crate")
-          done
-
-          [[ ${#args[@]} -eq 0 ]] || cargo publish --locked --no-verify "${args[@]}"
+          cargo release publish --workspace --no-verify --allow-branch HEAD --execute --no-confirm 2>&1 | tee "$RUNNER_TEMP/publish.log" \
+            || grep -q 'no packages selected' "$RUNNER_TEMP/publish.log"
 
   release:
     name: GitHub Release

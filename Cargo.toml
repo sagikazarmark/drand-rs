@@ -27,8 +27,10 @@ broken_intra_doc_links = "deny"
 missing_crate_level_docs = "deny"
 
 [workspace.metadata.release]
-sign-commit = true
+# The Release workflow commits the version bump, without a signing key.
+# sign-commit = true
 sign-tag = true
 shared-version = true
+pre-release-commit-message = "chore: release v{{version}}"
 tag-message = "Release {{version}}"
 tag-name = "v{{version}}"
