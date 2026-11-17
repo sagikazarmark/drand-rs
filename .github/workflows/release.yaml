@@ -32,7 +32,6 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
-      previous: ${{ steps.bump.outputs.previous }}
 
     steps:
       # The Commit job pushes before the `release` environment can stop a run from another branch.
@@ -44,7 +43,7 @@ jobs:
             exit 1
           fi
 
-      # Full history, for the tag the release notes start at.
+      # Every tag, for the check that the version is not released yet.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,7 +92,6 @@ jobs:
           {
             echo "version=$version"
             echo "tag=v$version"
-            echo "previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || true)"
           } >> "$GITHUB_OUTPUT"
 
   commit:
@@ -191,12 +189,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PREVIOUS: ${{ needs.package.outputs.previous }}
           TAG: ${{ needs.package.outputs.tag }}
           TARGET: ${{ needs.commit.outputs.sha }}
         run: |
           args=()
           [[ "$TAG" != *-* ]] || args+=(--prerelease)
-          [[ -z "$PREVIOUS" ]] || args+=(--notes-start-tag "$PREVIOUS")
 
           gh release create "$TAG" --target "$TARGET" --generate-notes "${args[@]}"
