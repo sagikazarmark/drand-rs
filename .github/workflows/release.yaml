@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump from the latest vX.Y.Z tag (ignored when version is set)
+        description: Version bump from the current version (ignored when version is set)
         type: choice
         options: [none, patch, minor, major]
         default: none
       version:
-        description: Exact version to release, vX.Y.Z (overrides bump)
+        description: Exact version to release, X.Y.Z (overrides bump)
         type: string
         required: false
 
@@ -25,17 +25,17 @@ defaults:
     shell: devenv shell -- bash -e {0}
 
 jobs:
-  version:
-    name: Version
+  package:
+    name: Package
     runs-on: ubuntu-latest
 
     outputs:
-      version: ${{ steps.pick.outputs.version }}
-      tag: ${{ steps.pick.outputs.tag }}
-      make-latest: ${{ steps.pick.outputs.make-latest }}
-      previous: ${{ steps.pick.outputs.previous }}
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      previous: ${{ steps.bump.outputs.previous }}
 
     steps:
+      # The Commit job pushes before the `release` environment can stop a run from another branch.
       - name: Check branch
         shell: bash
         run: |
@@ -44,38 +44,55 @@ jobs:
             exit 1
           fi
 
-      - name: Pick the version
-        id: pick
-        uses: sagikazarmark/next-version@e291b39a83bf84c948c419871f910173bf8343dc # v0.2.0
-        with:
-          bump: ${{ inputs.bump }}
-          version: ${{ inputs.version }}
-
-  package:
-    name: Package
-    needs: version
-    runs-on: ubuntu-latest
-
-    steps:
+      # Full history, for the tag the release notes start at.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up devenv
         uses: sagikazarmark/setup-devenv@c36f9e57ca50ee1a6dad1a05a1a684e321f8096a # v0.3.0
 
+      # cargo-release bumps from the version in Cargo.toml (the last release) and refuses to go back.
+      # The version already in Cargo.toml changes nothing: a release that stopped after the Commit job
+      # resumes with that version.
       # `cargo publish --dry-run`, not `cargo package`: it skips `publish = false` crates.
       - name: Bump the version and package every crate
+        id: bump
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
         run: |
-          cargo release version "$VERSION" --execute --no-confirm
+          target="${VERSION#v}"
+          target="${target:-$BUMP}"
+
+          if [[ "$target" == none ]]; then
+            echo "::error::Pick a bump or a version"
+            exit 1
+          fi
+
+          cargo release version "$target" --execute --no-confirm
+
+          id="$(cargo pkgid -p drand)"
+          version="${id##*[#@]}"
+
+          if git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version is already released"
+            exit 1
+          fi
+
           cargo publish --dry-run --workspace --locked --allow-dirty
+
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || true)"
+          } >> "$GITHUB_OUTPUT"
 
   commit:
     name: Commit
-    needs: [version, package]
+    needs: package
     runs-on: ubuntu-latest
 
     permissions:
@@ -104,7 +121,7 @@ jobs:
       - name: Bump, commit and push the version
         id: commit
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.package.outputs.version }}
         run: |
           cargo release version "$VERSION" --execute --no-confirm
 
@@ -117,7 +134,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    needs: [version, commit]
+    needs: commit
     runs-on: ubuntu-latest
     environment: release
 
@@ -154,25 +171,26 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [version, commit, publish]
+    needs: [package, commit, publish]
     runs-on: ubuntu-latest
 
     permissions:
       contents: write
 
+    # Every release is newer than the last (cargo-release does not go back), so GitHub marks it the
+    # Latest release, unless it is a prerelease.
     steps:
       - name: Publish the GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PREVIOUS: ${{ needs.version.outputs.previous }}
-          TAG: ${{ needs.version.outputs.tag }}
+          PREVIOUS: ${{ needs.package.outputs.previous }}
+          TAG: ${{ needs.package.outputs.tag }}
           TARGET: ${{ needs.commit.outputs.sha }}
-          LATEST: ${{ needs.version.outputs.make-latest }}
         run: |
-          gh release create "$TAG" \
-            --target "$TARGET" \
-            --generate-notes \
-            --latest="$LATEST" \
-            ${PREVIOUS:+--notes-start-tag "$PREVIOUS"}
+          args=()
+          [[ "$TAG" != *-* ]] || args+=(--prerelease)
+          [[ -z "$PREVIOUS" ]] || args+=(--notes-start-tag "$PREVIOUS")
+
+          gh release create "$TAG" --target "$TARGET" --generate-notes "${args[@]}"
